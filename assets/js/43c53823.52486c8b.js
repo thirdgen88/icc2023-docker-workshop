@@ -1,0 +1,1 @@
+"use strict";(self.webpackChunkguide=self.webpackChunkguide||[]).push([[7200],{3871:e=>{e.exports=JSON.parse('{"label":"facebook","permalink":"/icc2023-docker-workshop/blog/tags/facebook","allTagsPath":"/icc2023-docker-workshop/blog/tags","count":1}')}}]);
