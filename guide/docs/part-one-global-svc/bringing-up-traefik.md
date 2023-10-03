@@ -26,7 +26,7 @@ docker network create proxy
 Finally, let's hop into the `global` folder that contains all of our services and bring up that compose stack:
 
 ```bash
-cd ~/icc2023-docker-workshop/global
+cd ~/Desktop/icc2023-docker-workshop/global
 docker compose up -d
 ```
 
