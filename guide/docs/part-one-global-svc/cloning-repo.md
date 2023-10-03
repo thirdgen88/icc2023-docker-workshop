@@ -13,7 +13,7 @@ Then, enter the following commands to change to our `Desktop` folder and clone t
 
 ```bash
 cd Desktop
-git clone https://github.com/thirdgen88/icc2023-docker-workshop
+git clone --recurse-submodules https://github.com/thirdgen88/icc2023-docker-workshop
 ```
 
 You should end up with a folder visible on your desktop.
