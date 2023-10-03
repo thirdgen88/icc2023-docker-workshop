@@ -1,0 +1,312 @@
+---
+title: Configuring Ignition IIoT Architecture
+description: Configuring Ignition IIoT Architecture for Traefik
+sidebar_position: 1
+---
+export const Highlight = ({children, color}) => (
+  <span
+    style={{
+      backgroundColor: color,
+      borderRadius: '2px',
+      color: '#fff',
+      padding: '0.2rem',
+    }}>
+    {children}
+  </span>
+);
+
+# Configuring Ignition IIoT Architecture
+
+In this section we're going to:
+
+- Modify the Ignition IIoT Example Architecture to tie into our Reverse Proxy
+- Add a database web UI for managing our database
+
+Where you see code blocks, we'll use the following colors to indicate what you'll need to add/remove/change:
+
+- _Add_ -> <Highlight color="#549f45">GREEN</Highlight>
+- _Remove_ -> <Highlight color="#952f2b">RED</Highlight>
+- _Modify or Change_ -> <Highlight color="#9b7539">ORANGE</Highlight>
+
+## Modify Default Compose Network
+
+Open up the `ia-architectures/iiot/docker-compose.yml` in VSCode.  Let's start with modifying the default Compose network by adding the following lines before the top-level `secrets` configuration:
+
+```yaml
+...
+
+# add-start
+# Add this!
+networks:
+  default:
+    name: proxy
+    external: true
+# add-end
+
+secrets:
+  gateway-admin-password:
+    file: secrets/gateway-admin-password
+  db-ignition-password:
+    file: secrets/db-ignition-password
+  db-root-password:
+    file: secrets/db-root-password
+```
+
+Instead of creating a dedicated network for these services, this will connect them to the existing `proxy` network so that Traefik can reach them.
+
+## Adding Labels to Ignition Services
+
+Next, we need to annotate some of the individual Ignition services to have them be recognized by Traefik.  The way this is done with Traefik is to use labels on the container to add the configurations we need.
+
+### Central Gateway
+
+Make the following changes highlighted below:
+
+```yaml
+# ...
+  gateway:
+    <<: *ignition-opts
+    build:
+      context: gw-build
+      dockerfile: Dockerfile
+      args:
+        IGNITION_VERSION: ${IGNITION_VERSION:-latest}
+        SUPPLEMENTAL_MODULES: "mqttdistributor mqttengine"
+        BASE_GWBK_NAME: gateway.gwbk
+        GATEWAY_ADMIN_USERNAME: admin
+      secrets:
+        # NOTE: changing a build secret will not bust the cache, run the build with `--no-cache` to force a rebuild
+        - gateway-admin-password
+    pull_policy: build
+    hostname: gateway
+    # remove-start
+    # REMOVE/COMMENT THESE PUBLISHED PORTS
+    #ports:
+    #  - 8088:8088
+    #  - 1883:1883
+    # remove-end
+    command: >
+      -n Ignition-gateway
+      -m ${GATEWAY_MAX_MEMORY:-512}
+      -a gateway.localtest.me
+    # change-next-line
+      -h 80
+    # change-next-line
+      -s 443
+    # add-start
+      --
+      gateway.useProxyForwardedHeader=true
+    # add-end
+    # add-start
+    # ADD THESE LABELS
+    labels:
+      - traefik.enable=true
+      - traefik.hostname=gateway-${COMPOSE_PROJECT_NAME}
+      - traefik.http.routers.gateway-${COMPOSE_PROJECT_NAME}.entrypoints=web,websecure
+      - traefik.http.services.gateway-${COMPOSE_PROJECT_NAME}.loadbalancer.server.port=8088
+    # add-end
+    volumes:
+      - gateway-data:/usr/local/bin/ignition/data
+      - ./gw-backup/gateway:/backup
+# ...
+```
+
+What we're doing here is:
+- Removing the published ports since we're going to use Traefik to connect to the Gateway
+- Updating the Public Address configuration to align with ports 80/443 from Traefik
+- Adding the `gateway.useProxyForwardedHeader=true` argument to the Gateway command to tell it to use the `X-Forwarded-*` headers that Traefik adds to the request.
+- Configure labels to describe Traefik router/service configurations.
+
+### Edge Gateway
+
+Add similar changes for the `gateway-edge1` service so that both Gateways are accessible through their respective names via Traefik on port 80.
+
+## Setting up Database
+
+For the Ignition IIoT Example, we're using a MariaDB database container.  Let's set it up to be accessible through Traefik using [phpMyAdmin](https://www.phpmyadmin.net/).
+
+### Modifying the `db` service
+
+First, let's remove the published ports since we're going to add a separate way to manage this database.  Edit the `docker-compose.yml` and find the `db` service and comment-out the port-publishing:
+
+```yaml
+# ...
+  db:
+    <<: *default-logging
+    image: mariadb:${MARIADB_VERSION:-latest}
+    # REMOVE/COMMENT THIS PORT PUBLISH
+    # remove-start
+    # ports:
+    #   - 3306:3306
+    # remove-end
+    environment:
+      MARIADB_USER: ignition
+      MARIADB_PASSWORD_FILE: /run/secrets/db-ignition-password
+      MARIADB_DATABASE: ignition
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/db-root-password
+    secrets:
+      - db-root-password
+      - db-ignition-password
+    volumes:
+      - db-data:/var/lib/mysql
+# ...
+```
+
+Then, let's add a new service definition after the `db` service to provide a new web UI for our database:
+
+```yaml
+  # add-start
+  # Add this after the `db` service
+  phpmyadmin:
+    image: phpmyadmin:5
+    labels:
+      - "traefik.enable=true"
+      - "traefik.hostname=db-${COMPOSE_PROJECT_NAME}"
+      - "traefik.http.routers.phpmyadmin-${COMPOSE_PROJECT_NAME}.entrypoints=web"
+    secrets:
+      - db-root-password
+    environment:
+      - PMA_HOST=${COMPOSE_PROJECT_NAME}-db-1
+      - MYSQL_ROOT_PASSWORD_FILE=/run/secrets/db-root-password
+  # add-end
+```
+
+<details><summary>Click to reveal final Ignition IIoT Docker Compose file with modifications</summary>
+<p>
+
+```yaml
+# IIoT Architecture Example
+# https://inductiveautomation.com/ignition/architectures
+# https://inductiveautomation.com/static/pdf/IgnitionArchitecture-IIoT-CloudRedundant.pdf
+---
+x-default-logging:
+  &default-logging
+  logging:
+    options:
+      max-size: '100m'
+      max-file: '5'
+    driver: json-file
+
+x-ignition-opts:
+  &ignition-opts
+  <<: *default-logging
+  env_file: gw-init/gateway.env
+  secrets:
+    - gateway-admin-password
+
+services:
+  gateway:
+    <<: *ignition-opts
+    build:
+      context: gw-build
+      dockerfile: Dockerfile
+      args:
+        IGNITION_VERSION: ${IGNITION_VERSION:-latest}
+        SUPPLEMENTAL_MODULES: "mqttdistributor mqttengine"
+        BASE_GWBK_NAME: gateway.gwbk
+        GATEWAY_ADMIN_USERNAME: admin
+      secrets:
+        # NOTE: changing a build secret will not bust the cache, run the build with `--no-cache` to force a rebuild
+        - gateway-admin-password
+    pull_policy: build
+    hostname: gateway
+    # ports:
+    #   - 8088:8088
+    #   - 1883:1883
+    command: >
+      -n Ignition-gateway
+      -m ${GATEWAY_MAX_MEMORY:-512}
+      -a gateway-${COMPOSE_PROJECT_NAME}.localtest.me
+      -h 80
+      -s 443
+      --
+      gateway.useProxyForwardedHeader=true
+    labels:
+      - traefik.enable=true
+      - traefik.hostname=gateway-${COMPOSE_PROJECT_NAME}
+      - traefik.http.routers.gateway-${COMPOSE_PROJECT_NAME}.entrypoints=web
+      - traefik.http.services.gateway-${COMPOSE_PROJECT_NAME}.loadbalancer.server.port=8088
+    volumes:
+      - gateway-data:/usr/local/bin/ignition/data
+      - ./gw-backup/gateway:/backup
+
+  gateway-edge1:
+    <<: *ignition-opts
+    build:
+      context: gw-build
+      dockerfile: Dockerfile
+      args:
+        IGNITION_VERSION: ${IGNITION_VERSION:-latest}
+        SUPPLEMENTAL_MODULES: "mqtttransmission"
+        BASE_GWBK_NAME: edge1.gwbk
+        IGNITION_EDITION: edge
+        GATEWAY_ADMIN_USERNAME: admin
+      secrets:
+        - gateway-admin-password
+    pull_policy: build
+    # ports:
+    #   - 8090:8088
+    command: >
+      -n Ignition-edge1
+      -m ${GATEWAY_MAX_MEMORY:-512}
+      -a gateway-edge1-${COMPOSE_PROJECT_NAME}.localtest.me
+      -h 80
+      -s 443
+    labels:
+      - traefik.enable=true
+      - traefik.hostname=gateway-edge1-${COMPOSE_PROJECT_NAME}
+      - traefik.http.routers.gateway-edge1-${COMPOSE_PROJECT_NAME}.entrypoints=web
+      - traefik.http.services.gateway-edge1-${COMPOSE_PROJECT_NAME}.loadbalancer.server.port=8088
+    volumes:
+      - gateway-edge1-data:/usr/local/bin/ignition/data
+      - ./gw-backup/edge1:/backup
+
+  db:
+    <<: *default-logging
+    image: mariadb:${MARIADB_VERSION:-latest}
+    # ports:
+    #   - 3306:3306
+    environment:
+      MARIADB_USER: ignition
+      MARIADB_PASSWORD_FILE: /run/secrets/db-ignition-password
+      MARIADB_DATABASE: ignition
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/db-root-password
+    secrets:
+      - db-root-password
+      - db-ignition-password
+    volumes:
+      - db-data:/var/lib/mysql
+
+  phpmyadmin:
+    image: phpmyadmin:5
+    labels:
+      - "traefik.enable=true"
+      - "traefik.hostname=db-${COMPOSE_PROJECT_NAME}"
+      - "traefik.http.routers.phpmyadmin-${COMPOSE_PROJECT_NAME}.entrypoints=web"
+    secrets:
+      - db-root-password
+    environment:
+      - PMA_HOST=${COMPOSE_PROJECT_NAME}-db-1
+      - MYSQL_ROOT_PASSWORD_FILE=/run/secrets/db-root-password
+
+networks:
+  default:
+    name: proxy
+    external: true
+
+secrets:
+  gateway-admin-password:
+    file: secrets/gateway-admin-password
+  db-ignition-password:
+    file: secrets/db-ignition-password
+  db-root-password:
+    file: secrets/db-root-password
+
+volumes:
+  gateway-data:
+  gateway-edge1-data:
+  db-data:
+```
+
+</p>
+</details>

@@ -1,0 +1,29 @@
+# This Override file adds HTTPS functionality once you've placed a certificate and key file at:
+#   - `traefik/localtest.me.crt`
+#   - `traefik/localtest.me.key`
+---
+services:
+  proxy:
+    environment:  # https://docs.traefik.io/reference/static-configuration/env/
+      TRAEFIK_ENTRYPOINTS_WEB_HTTP_MIDDLEWARES: redirect-to-https@file
+      TRAEFIK_ENTRYPOINTS_WEBSECURE_HTTP_TLS: true
+      TRAEFIK_ENTRYPOINTS_WEBSECURE_ADDRESS: :443
+      TRAEFIK_PROVIDERS_FILE_FILENAME: /etc/traefik/dynamic.yml
+    ports:
+      - "443:443"
+    volumes:
+      - type: bind
+        source: ./traefik/dynamic.yml
+        target: /etc/traefik/dynamic.yml
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./traefik/localtest.me.crt
+        target: /etc/traefik/cert.crt
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./traefik/localtest.me.key
+        target: /etc/traefik/cert.key
+        bind:
+          create_host_path: false

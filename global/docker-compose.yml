@@ -1,0 +1,85 @@
+### Global Reverse Proxy Stack
+# NOTE: Binds to Port 80 on your host, must be free in order to work!
+#
+# ===Usage===
+# Bring up the Traefik Reverse Proxy:
+#   docker compose -f stack-proxy.yml -p proxy up -d
+#
+# Bring down and stop the Reverse Proxy:
+#   docker compose down
+---
+services:
+  proxy:
+    image: traefik:2.10
+    container_name: proxy
+    restart: always
+    environment:  # https://docs.traefik.io/reference/static-configuration/env/
+      TRAEFIK_ENTRYPOINTS_WEB_ADDRESS: :80
+      TRAEFIK_API_DASHBOARD: true
+      TRAEFIK_PROVIDERS_DOCKER: true
+      TRAEFIK_PROVIDERS_DOCKER_EXPOSEDBYDEFAULT: false
+      TRAEFIK_PROVIDERS_DOCKER_DEFAULTRULE: >
+        Host(`{{ or (index .Labels "traefik.hostname")
+                    .ContainerName
+              }}.localtest.me`)
+      TRAEFIK_PROVIDERS_DOCKER_ALLOWEMPTYSERVICES: true
+      TRAEFIK_PROVIDERS_DOCKER_NETWORK: proxy
+      TRAEFIK_LOG_LEVEL: DEBUG
+    ports:
+      - "80:80"
+    networks:
+      - default
+      - internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.hostname=proxy"
+      - "traefik.http.routers.proxy-${COMPOSE_PROJECT_NAME}.entrypoints=web"
+      - "traefik.http.routers.proxy-${COMPOSE_PROJECT_NAME}.service=api@internal"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.hostname=portainer"
+      - "traefik.http.routers.portainer-${COMPOSE_PROJECT_NAME}.entrypoints=web"
+      - "traefik.http.services.portainer-${COMPOSE_PROJECT_NAME}.loadbalancer.server.port=9000"
+    secrets:
+      - portainer-admin-password
+    command: >-
+      --admin-password-file /run/secrets/portainer-admin-password
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer-data:/data
+
+  # Mailhog - SMTP Test Tool
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    hostname: mailhog
+    container_name: mailhog
+    restart: always
+    ports:
+      - 1025:1025
+    labels:
+      - "traefik.enable=true"
+      # ref: https://doc.traefik.io/traefik/routing/providers/docker/#services
+      - "traefik.http.routers.mailhog-${COMPOSE_PROJECT_NAME}.entrypoints=web"
+      # - "traefik.http.services.mailhog-${COMPOSE_PROJECT_NAME}.loadbalancer.server.port=8025"
+
+secrets:
+  portainer-admin-password:
+    file: secrets/PORTAINER_ADMIN_PASSWORD
+
+networks:
+  default:
+    name: proxy
+    external: true
+  internal:
+    name: internal
+    external: true
+
+volumes:
+  portainer-data:

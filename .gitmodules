@@ -1,0 +1,3 @@
+[submodule "ia-architectures"]
+	path = ia-architectures
+	url = https://github.com/thirdgen88/ignition-examples

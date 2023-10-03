@@ -1,0 +1,8 @@
+{
+  "label": "Part One - Global Services",
+  "position": 2,
+  "link": {
+    "type": "generated-index",
+    "description": "Setup Global Services like Traefik, Mailhog, etc..."
+  }
+}
